@@ -110,55 +110,65 @@ public class Sqlite {
             List<Object> inputValues = input(); // Användarinput för såsen och kategorin
 
             // Hämta värden för såsen och kategorin från input
-            String sauceTitel = (String) inputValues.get(0);
+            String sauceTitle = (String) inputValues.get(0);
             String sauceManufacturer = (String) inputValues.get(1);
             String sauceDescription = (String) inputValues.get(2);
             Integer saucePrice = (Integer) inputValues.get(3);
             String categoryName = (String) inputValues.get(4);
 
-            // Lägg till kategorin i category-tabellen
-            preparedCategory.setString(1, categoryName);
-            preparedCategory.executeUpdate();
+            // Starta en transaktion
+            conn.setAutoCommit(false);
 
-            // Hämta det senast tilldelade ID:t för kategorin
-            int categoryId = getLastInsertedId(conn);
+            try {
+                // Lägg till kategorin i category-tabellen
+                preparedCategory.setString(1, categoryName);
+                preparedCategory.executeUpdate();
 
-            // Lägg till såsen i sauce-tabellen
-            preparedSauce.setString(1, sauceTitel);
-            preparedSauce.setString(2, sauceManufacturer);
-            preparedSauce.setString(3, sauceDescription);
-            preparedSauce.setDouble(4, saucePrice);
-            preparedSauce.executeUpdate();
+                // Hämta kategorins ID
+                int categoryId = getLastInsertedId(conn, "category");
 
-            // Hämta det senast tilldelade ID:t för såsen
-            int sauceId = getLastInsertedId(conn);
+                // Lägg till såsen i sauce-tabellen
+                preparedSauce.setString(1, sauceTitle);
+                preparedSauce.setString(2, sauceManufacturer);
+                preparedSauce.setString(3, sauceDescription);
+                preparedSauce.setDouble(4, saucePrice);
+                preparedSauce.executeUpdate();
 
-            // Koppla kategorin till såsen i sauceCategory-tabellen
-            preparedSauceCategory.setInt(1, sauceId);
-            preparedSauceCategory.setInt(2, categoryId);
-            preparedSauceCategory.executeUpdate();
+                // Hämta såsens ID
+                int sauceId = getLastInsertedId(conn, "sauce");
 
-            conn.commit();
-            System.out.println("You successfully added a new sauce with the associated category.");
+                // Koppla kategorin till såsen i sauceCategory-tabellen
+                preparedSauceCategory.setInt(1, sauceId);
+                preparedSauceCategory.setInt(2, categoryId);
+                preparedSauceCategory.executeUpdate();
 
-        } catch (SQLException e) {
-            System.out.println("Something Went wrong, please try again, " + e.getMessage());
-        }
-    }
+                // Commit om allt gick bra
+                conn.commit();
+                System.out.println("You successfully added a new sauce with the associated category.");
 
-
-    private static int getLastInsertedId(Connection conn) {
-        int lastId = 0;
-        try (Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT last_insert_rowid()")) {
-            if (rs.next()) {
-                lastId = rs.getInt(1);
+            } catch (SQLException e) {
+                // Om något går fel, gör en rollback
+                conn.rollback();
+                System.out.println("Something went wrong, please try again: " + e.getMessage());
+            } finally {
+                // Återställ auto-commit till true för att undvika att påverka andra operationer
+                conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            System.out.println("Something went wrong" + e.getMessage());
+            System.out.println("Error connecting to the database: " + e.getMessage());
         }
-        return lastId;
     }
+
+    private static int getLastInsertedId(Connection conn, String tableName) {
+        String query = "SELECT last_insert_rowid() FROM " + tableName;
+        try (PreparedStatement pstmt = conn.prepareStatement(query);
+             ResultSet rs = pstmt.executeQuery()) {
+            return rs.getInt(1);
+        } catch (SQLException e) {
+            System.out.println("Error fetching last inserted ID " + e.getMessage());
+            return -1;
+        }
+        }
 
 
     private static List<Object> input() {
@@ -356,54 +366,89 @@ public class Sqlite {
 
 
     private static void updateSauceCategory() {
-        String sql = "UPDATE category SET categoryName = ? WHERE categoryId = (SELECT categoryId FROM sauce WHERE sauceId = ?)";
 
-        Connection conn = null;
-        try {
-            conn = connect();
-            conn.setAutoCommit(false);
 
-            System.out.println("Enter the ID of the sauce you want to update: ");
-            int sauceId = scanner.nextInt();
-            scanner.nextLine();
+        System.out.println("Enter the ID of the sauce you want to update: ");
+        int sauceId = scanner.nextInt();
+        scanner.nextLine(); // Consume newline character
 
-            System.out.println("Enter the new category name for the sauce: ");
-            String categoryName = scanner.nextLine();
+        System.out.println("Enter the new category name for the sauce: ");
+        String categoryName = scanner.nextLine();
 
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, categoryName);
+        // Kontrollera om kategorin redan finns
+        int categoryId = getCategoryId(categoryName);
+
+        if (categoryId == -1) {
+            // Om kategorin inte finns, lägg till den i category-tabellen
+            addCategory(categoryName);
+            // Hämta det nya kategorins ID
+            categoryId = getCategoryId(categoryName);
+        }
+
+        if (categoryId != -1) {
+            String sql = "UPDATE sauceCategory " +
+                    "SET categoryId = ? " +
+                    "WHERE sauceId = ?";
+
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setInt(1, categoryId);
                 pstmt.setInt(2, sauceId);
 
                 int rowsUpdated = pstmt.executeUpdate();
                 if (rowsUpdated > 0) {
                     System.out.println("Sauce category updated successfully for sauce ID: " + sauceId);
+                    conn.commit();
                 } else {
                     System.out.println("Could not update sauce category for sauce ID: " + sauceId);
                 }
-                conn.commit();
-            } catch (SQLException innerException) {
-                System.out.println("Error updating sauce category: " + innerException.getMessage());
-                if (conn != null) {
-                    try {
-                        conn.rollback(); // Ångra eventuella ändringar om det blir ett problem
-                    } catch (SQLException rollbackException) {
-                        System.out.println("Rollback failed: " + rollbackException.getMessage());
-                    }
-                }
+            } catch (SQLException e) {
+                System.out.println("Error updating sauce category: " + e.getMessage());
+            }
+        } else {
+            System.out.println("Category does not exist and could not be added.");
+        }
+
+    }
+
+    // Hjälpmetod för att få kategorins ID
+    private static int getCategoryId(String categoryName) {
+        // SQL-fråga för att hämta kategorins ID baserat på namnet
+        String sql = "SELECT categoryId FROM category WHERE categoryName = ?";
+        int categoryId = -1;
+
+        try (Connection conn = connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, categoryName);
+            ResultSet rs = pstmt.executeQuery();
+
+            if (rs.next()) {
+                categoryId = rs.getInt("categoryId");
             }
         } catch (SQLException e) {
-            System.out.println("Error connecting to database: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    conn.setAutoCommit(true);
-                    conn.close();
-                } catch (SQLException closeException) {
-                    System.out.println("Error while closing connection: " + closeException.getMessage());
-                }
-            }
+            System.out.println("Error retrieving category ID: " + e.getMessage());
+        }
+        return categoryId;
+    }
+
+    // Hjälpmetod för att lägga till en ny kategori
+    private static void addCategory(String categoryName) {
+        String insertCategorySQL = "INSERT INTO category(categoryName) VALUES (?)";
+
+        try (Connection conn = connect();
+             PreparedStatement preparedCategory = conn.prepareStatement(insertCategorySQL)) {
+            preparedCategory.setString(1, categoryName);
+            preparedCategory.executeUpdate();
+            conn.commit();
+            System.out.println("New category added: " + categoryName);
+        } catch (SQLException e) {
+            System.out.println("Error adding category: " + e.getMessage());
         }
     }
+
+
+
+
 
 
     private static void showAveragePrice() {
