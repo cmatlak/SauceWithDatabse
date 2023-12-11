@@ -78,7 +78,7 @@ public class Sqlite {
 
     private static void countRowsInTable() {
         String sql = "SELECT COUNT(*) as count FROM " + "sauce";
-        int rowCount = 0;
+        int rowCount;
 
         try (Connection conn = connect();
              Statement stmt = conn.createStatement();
@@ -192,7 +192,7 @@ public class Sqlite {
                 values.add(price);
                 values.add(category);
 
-                // Slut på loop när all input är insamlad korrekt
+
                 break;
             }
 
@@ -213,8 +213,8 @@ public class Sqlite {
         } finally {
             if (conn != null) {
                 try {
-                    conn.setAutoCommit(true); // Återställ till autokommittering
-                    conn.close(); // Stäng anslutningen
+                    conn.setAutoCommit(true);
+                    conn.close();
                 } catch (SQLException closeException) {
                     System.out.println("Error while closing connection: " + closeException.getMessage());
                 }
